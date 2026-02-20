@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import axios from "axios";
 import ReactCrop, { centerCrop, makeAspectCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
-import removeBackground from "@imgly/background-removal";
+import { removeBackground } from "@imgly/background-removal";
 
 export default function Converter() {
   const [file, setFile] = useState(null);
