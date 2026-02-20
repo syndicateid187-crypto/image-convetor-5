@@ -19,8 +19,9 @@
             "dest": "server.js"
         },
         {
-            "src": "/uploads/(.*)",
-            "dest": "server.js"
+            "src": "/assets/(.*)",
+            "dest": "client/assets/$1",
+            "check": true
         },
         {
             "src": "/(.*)",
