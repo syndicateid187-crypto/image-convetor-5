@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from "react";
 import axios from "axios";
 import ReactCrop, { centerCrop, makeAspectCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
-import { removeBackground } from "@imgly/background-removal";
 
 export default function Converter() {
   const [file, setFile] = useState(null);
@@ -24,7 +23,6 @@ export default function Converter() {
   const [showCrop, setShowCrop] = useState(false);
   const [crop, setCrop] = useState();
   const [completedCrop, setCompletedCrop] = useState();
-  const [removeBg, setRemoveBg] = useState(false);
   const imgRef = useRef(null);
 
   const fileInputRef = useRef(null);
@@ -90,21 +88,8 @@ export default function Converter() {
 
     setLoading(true);
     try {
-      let fileToUpload = file;
-
-      // CLIENT-SIDE BACKGROUND REMOVAL
-      if (removeBg && file.type.startsWith("image/")) {
-        try {
-          const bgRemovedBlob = await removeBackground(file);
-          fileToUpload = new File([bgRemovedBlob], file.name, { type: "image/png" });
-        } catch (bgErr) {
-          console.error("Background Removal Error:", bgErr);
-          alert("Background removal failed. Proceeding without it.");
-        }
-      }
-
       const formData = new FormData();
-      formData.append("file", fileToUpload);
+      formData.append("file", file);
       formData.append("format", format);
       formData.append("quality", quality);
       formData.append("width", width);
@@ -248,17 +233,9 @@ export default function Converter() {
               </div>
             </div>
 
-            {/* AI Tools */}
+            {/* Crop Settings */}
             {file && file.type.startsWith("image/") && (
               <div className="space-y-4">
-                <button
-                  onClick={() => setRemoveBg(!removeBg)}
-                  className={`w-full py-3 rounded-xl text-xs font-black border transition-all flex items-center justify-center gap-2 ${removeBg ? "border-purple-500 bg-purple-500/10 text-purple-400Shadow-[0_0_15px_rgba(168,85,247,0.3)]" : "border-slate-800 text-slate-500 hover:border-slate-700"}`}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11l-7-7-7 7m14 0v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8m14 0l-7 7-7-7" /></svg>
-                  {removeBg ? "REMOVE BG ENABLED" : "REMOVE BACKGROUND (AI)"}
-                </button>
-
                 <button onClick={() => setShowCrop(!showCrop)} className={`w-full py-3 rounded-xl text-xs font-black border transition-all ${showCrop ? "border-cyan-500 bg-cyan-500/10 text-cyan-400" : "border-slate-800 text-slate-500 hover:border-slate-700"}`}>
                   {showCrop ? "FINISH CROPPING" : "START VISUAL CROP"}
                 </button>
