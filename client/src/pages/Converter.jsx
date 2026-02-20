@@ -86,6 +86,13 @@ export default function Converter() {
   const handleConvert = async () => {
     if (!file) return;
 
+    // VERCEL LIMIT CHECK (Hobby plan is 4.5MB)
+    if (file.size > 4.5 * 1024 * 1024) {
+      if (!window.confirm("This file exceeds Vercel's 4.5MB upload limit. The conversion might fail. Do you want to try anyway?")) {
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const formData = new FormData();
@@ -122,8 +129,24 @@ export default function Converter() {
         format
       });
     } catch (err) {
-      const errorMsg = err.response ? await err.response.data.text() : err.message;
-      alert(`Processing failed: ${errorMsg || "Unknown error"}`);
+      console.error("Conversion error:", err);
+      let errorMsg = "Unknown error";
+
+      if (err.response) {
+        if (err.response.status === 413) {
+          errorMsg = "File is too large for the server (Request Entity Too Large). Vercel Hobby limits are 4.5MB.";
+        } else {
+          try {
+            errorMsg = await err.response.data.text();
+          } catch (e) {
+            errorMsg = `Server error: ${err.response.status}`;
+          }
+        }
+      } else {
+        errorMsg = err.message;
+      }
+
+      alert(`Processing failed: ${errorMsg}`);
     } finally {
       setLoading(false);
     }
