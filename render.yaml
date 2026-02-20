@@ -3,7 +3,7 @@ services:
     name: imae-convetor
     env: node
     buildCommand: npm run install-all && npm run build
-    startCommand: npm start
+    startCommand: node server.js
     envVars:
       - key: NODE_VERSION
         value: 20
