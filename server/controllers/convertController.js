@@ -1,4 +1,4 @@
-
+import os from 'os';
 import multer from 'multer';
 import sharp from 'sharp';
 import fs from 'fs';
@@ -6,12 +6,10 @@ import path from 'path';
 import { PDFDocument } from 'pdf-lib';
 import pdf from 'pdf-poppler';
 
-const __dirname = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname)).replace(/^\/([a-zA-Z]:)/, '$1'); // Fix for Windows paths in ESM
-const uploadsDir = path.join(__dirname, '..', 'uploads');
+const uploadsDir = os.tmpdir();
 
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// No need to ensure uploadsDir exists as it's the system temp dir, 
+// but we can check if it's writable if needed.
 
 const storage = multer.diskStorage({
   destination: uploadsDir,
@@ -96,27 +94,36 @@ const convertController = (req, res) => {
 
       // PDF → IMAGE
       if (ext === ".pdf" && ["png", "jpg", "jpeg", "webp"].includes(format)) {
-        const opts = {
-          format: format === "webp" ? "png" : format,
-          out_dir: uploadsDir,
-          out_prefix: path.basename(inputPath, ".pdf"),
-          page: 1
-        };
+        try {
+          const opts = {
+            format: format === "webp" ? "png" : format,
+            out_dir: uploadsDir,
+            out_prefix: path.basename(inputPath, ".pdf") + "_" + Date.now(),
+            page: 1
+          };
 
-        await pdf.convert(inputPath, opts);
-        let tempOutputPath = path.join(uploadsDir, `${opts.out_prefix}-1.${opts.format}`);
-        let finalOutputPath = tempOutputPath;
+          await pdf.convert(inputPath, opts);
+          let tempOutputPath = path.join(uploadsDir, `${opts.out_prefix}-1.${opts.format}`);
 
-        if (format === "webp") {
-          finalOutputPath = tempOutputPath + ".webp";
-          await sharp(tempOutputPath).webp().toFile(finalOutputPath);
-          fs.unlinkSync(tempOutputPath);
+          if (!fs.existsSync(tempOutputPath)) {
+            throw new Error("PDF conversion failed: output file not generated. This might be due to missing system dependencies (poppler-utils) on the server.");
+          }
+
+          let finalOutputPath = tempOutputPath;
+          if (format === "webp") {
+            finalOutputPath = tempOutputPath + ".webp";
+            await sharp(tempOutputPath).webp().toFile(finalOutputPath);
+            if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+          }
+
+          return res.download(finalOutputPath, `converted.${format}`, () => {
+            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+            if (fs.existsSync(finalOutputPath)) fs.unlinkSync(finalOutputPath);
+          });
+        } catch (pdfErr) {
+          console.error("PDF Poppler Error:", pdfErr);
+          throw new Error("PDF to Image conversion is not supported in this server environment (requires poppler-utils). Please use another format or tool.");
         }
-
-        return res.download(finalOutputPath, `converted.${format}`, () => {
-          fs.unlinkSync(inputPath);
-          if (fs.existsSync(finalOutputPath)) fs.unlinkSync(finalOutputPath);
-        });
       }
 
       // PDF COMPRESSION (Basic Re-save/Optimize)
