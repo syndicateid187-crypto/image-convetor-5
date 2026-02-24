@@ -1,62 +1,108 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import axios from "axios";
 import ReactCrop, { centerCrop, makeAspectCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
+import Particles, { initParticlesEngine } from "@tsparticles/react";
+import { loadSlim } from "tsparticles-slim";
+
+// Refined Particle Background with v3 Init
+const PremiumBackground = () => {
+  const [init, setInit] = useState(false);
+
+  useEffect(() => {
+    initParticlesEngine(async (engine) => {
+      await loadSlim(engine);
+    }).then(() => {
+      setInit(true);
+    });
+  }, []);
+
+  const options = useMemo(() => ({
+    background: { color: { value: "transparent" } },
+    fpsLimit: 120,
+    particles: {
+      number: { value: 80, density: { enable: true, area: 1000 } },
+      color: { value: ["#a78bfa", "#c084fc", "#60a5fa", "#ffffff"] },
+      links: { enable: true, distance: 180, opacity: 0.2, color: "#8b5cf6", width: 0.5 },
+      move: { enable: true, speed: 0.4, direction: "none", random: true, straight: false, outModes: { default: "out" } },
+      size: { value: { min: 0.5, max: 2.5 } },
+      opacity: { value: { min: 0.2, max: 0.7 } },
+      shape: { type: "circle" }
+    },
+    interactivity: {
+      events: { onHover: { enable: true, mode: "grab" }, onClick: { enable: true, mode: "push" } },
+      modes: { grab: { distance: 250, links: { opacity: 0.4 } }, push: { quantity: 3 } }
+    },
+    detectRetina: true
+  }), []);
+
+  if (!init) return null;
+  return <Particles id="tsparticles" className="fixed inset-0 -z-10" options={options} />;
+};
 
 export default function Converter() {
-  const [file, setFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
+  const [files, setFiles] = useState([]);
   const [format, setFormat] = useState("png");
-  const [quality, setQuality] = useState(80);
   const [width, setWidth] = useState("");
   const [height, setHeight] = useState("");
   const [loading, setLoading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [result, setResult] = useState(null);
 
-  // Advanced Features
   const [targetValue, setTargetValue] = useState("");
   const [targetUnit, setTargetUnit] = useState("KB");
-  const [pdfCompress, setPdfCompress] = useState(false);
 
-  // Visual Crop state
   const [showCrop, setShowCrop] = useState(false);
-  const [crop, setCrop] = useState();
-  const [completedCrop, setCompletedCrop] = useState();
-  const imgRef = useRef(null);
+  const [activeCropIndex, setActiveCropIndex] = useState(0);
+  const [fileCrops, setFileCrops] = useState({});
 
+  const imgRef = useRef(null);
   const fileInputRef = useRef(null);
+  const [previews, setPreviews] = useState([]);
 
   useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
-      setCrop(undefined);
-      setCompletedCrop(undefined);
-      return;
-    }
-
-    if (file.type.startsWith("image/")) {
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
-      return () => URL.revokeObjectURL(url);
-    } else if (file.type === "application/pdf") {
-      setPreviewUrl("pdf-placeholder");
-    }
-  }, [file]);
+    const newPreviews = files.map(file => {
+      if (file.type.startsWith("image/")) {
+        return { url: URL.createObjectURL(file), name: file.name, size: file.size, type: file.type };
+      }
+      return { url: "pdf-placeholder", name: file.name, size: file.size, type: file.type };
+    });
+    setPreviews(newPreviews);
+    return () => {
+      newPreviews.forEach(p => { if (p.url !== "pdf-placeholder") URL.revokeObjectURL(p.url); });
+    };
+  }, [files]);
 
   const onImageLoad = (e) => {
-    const { width, height } = e.currentTarget;
-    const initialCrop = centerCrop(
-      makeAspectCrop(
-        { unit: '%', width: 90 },
-        1,
-        width,
-        height
-      ),
-      width,
-      height
-    );
-    setCrop(initialCrop);
+    const { width: imgW, height: imgH } = e.currentTarget;
+    const initialCrop = centerCrop(makeAspectCrop({ unit: '%', width: 90 }, 1, imgW, imgH), imgW, imgH);
+    if (!fileCrops[activeCropIndex]) {
+      setFileCrops(prev => ({ ...prev, [activeCropIndex]: { crop: initialCrop, completedCrop: null } }));
+    }
+  };
+
+  const handleCropChange = (c) => {
+    setFileCrops(prev => ({ ...prev, [activeCropIndex]: { ...prev[activeCropIndex], crop: c } }));
+  };
+
+  const handleCropComplete = (c) => {
+    if (imgRef.current) {
+      const image = imgRef.current;
+      const scaleX = image.naturalWidth / image.width;
+      const scaleY = image.naturalHeight / image.height;
+      setFileCrops(prev => ({
+        ...prev,
+        [activeCropIndex]: {
+          ...prev[activeCropIndex],
+          completedCrop: {
+            x: Math.round(c.x * scaleX),
+            y: Math.round(c.y * scaleY),
+            width: Math.round(c.width * scaleX),
+            height: Math.round(c.height * scaleY)
+          }
+        }
+      }));
+    }
   };
 
   const formatSize = (bytes) => {
@@ -71,285 +117,239 @@ export default function Converter() {
     if (!targetValue) return null;
     const val = parseFloat(targetValue);
     const units = { B: 1, KB: 1024, MB: 1024 * 1024, GB: 1024 * 1024 * 1024 };
-    return Math.floor(val * units[targetUnit]);
+    return Math.floor(val * (units[targetUnit] || 1024));
+  };
+
+  const handleFiles = (newFiles) => {
+    const validFiles = Array.from(newFiles).filter(f => f.type.startsWith("image/") || f.type === "application/pdf");
+    setFiles(prev => [...prev, ...validFiles]);
+    setResult(null);
+    if (fileInputRef.current) fileInputRef.current.value = ""; // Allow duplicate uploads
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
-      setResult(null);
-    }
+    if (e.dataTransfer.files) handleFiles(e.dataTransfer.files);
+  };
+
+  const removeFile = (index) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+    setFileCrops(prev => {
+      const n = { ...prev };
+      delete n[index];
+      return n;
+    });
+    if (files.length === 1) setShowCrop(false);
   };
 
   const handleConvert = async () => {
-    if (!file) return;
-
-    // VERCEL LIMIT CHECK (Hobby plan is 4.5MB)
-    if (file.size > 4.5 * 1024 * 1024) {
-      if (!window.confirm("This file exceeds Vercel's 4.5MB upload limit. The conversion might fail. Do you want to try anyway?")) {
-        return;
-      }
-    }
-
+    if (files.length === 0) return;
     setLoading(true);
     try {
       const formData = new FormData();
-      formData.append("file", file);
+      files.forEach(f => formData.append("files", f));
       formData.append("format", format);
-      formData.append("quality", quality);
       formData.append("width", width);
       formData.append("height", height);
-      formData.append("pdfCompress", pdfCompress);
-
-      const tSize = getTargetSizeInBytes();
-      if (tSize) formData.append("targetSize", tSize);
-
-      if (showCrop && completedCrop && imgRef.current) {
-        const image = imgRef.current;
-        const scaleX = image.naturalWidth / image.width;
-        const scaleY = image.naturalHeight / image.height;
-
-        formData.append("cropX", Math.round(completedCrop.x * scaleX));
-        formData.append("cropY", Math.round(completedCrop.y * scaleY));
-        formData.append("cropW", Math.round(completedCrop.width * scaleX));
-        formData.append("cropH", Math.round(completedCrop.height * scaleY));
-      }
-
-      const backendUrl = "/api/convert";
-      const res = await axios.post(backendUrl, formData, {
-        responseType: "blob"
+      const computedTargetSize = getTargetSizeInBytes();
+      if (computedTargetSize) formData.append("targetSize", computedTargetSize);
+      const cropsData = {};
+      Object.entries(fileCrops).forEach(([idx, data]) => {
+        if (data.completedCrop) cropsData[idx] = data.completedCrop;
       });
-
+      if (Object.keys(cropsData).length > 0) formData.append("crops", JSON.stringify(cropsData));
+      const res = await axios.post("/api/convert", formData, { responseType: "blob" });
       const blob = new Blob([res.data]);
       setResult({
         url: window.URL.createObjectURL(blob),
         size: blob.size,
-        format
+        format: files.length > 1 ? "zip" : format
       });
     } catch (err) {
-      console.error("Conversion error:", err);
-      let errorMsg = "Unknown error";
-
-      if (err.response) {
-        if (err.response.status === 413) {
-          errorMsg = "File is too large for the server (Request Entity Too Large). Vercel Hobby limits are 4.5MB.";
-        } else {
+      console.error("Conversion Error:", err);
+      if (err.response && err.response.data instanceof Blob) {
+        // If the error response is a blob, we need to read it as text
+        const reader = new FileReader();
+        reader.onload = () => {
           try {
-            errorMsg = await err.response.data.text();
+            const errorData = JSON.parse(reader.result);
+            alert(`Conversion failed: ${errorData.error || "Unknown server error"}`);
           } catch (e) {
-            errorMsg = `Server error: ${err.response.status}`;
+            alert("Processing failed. Please check your network or try a smaller batch.");
           }
-        }
+        };
+        reader.readAsText(err.response.data);
       } else {
-        errorMsg = err.message;
+        alert("Processing failed. Please try again.");
       }
-
-      alert(`Processing failed: ${errorMsg}`);
     } finally {
       setLoading(false);
     }
   };
 
-  const downloadResult = () => {
-    const link = document.createElement("a");
-    link.href = result.url;
-    link.download = `smart_pro_${Date.now()}.${result.format}`;
-    link.click();
-  };
-
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-100 flex items-center justify-center p-4 font-sans selection:bg-cyan-500/30">
-      <div className="max-w-6xl w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+    <div className="min-h-screen text-white font-sans selection:bg-indigo-500/30 overflow-x-hidden relative">
+      <PremiumBackground />
 
-        {/* LEFT SECTION: Upload & Preview (7 cols) */}
-        <div className="lg:col-span-7 flex flex-col space-y-6">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-cyan-500 rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(6,182,212,0.5)]">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+      <div className="max-w-7xl mx-auto px-6 py-12 relative z-10 transition-all duration-1000">
+        {/* HEADER */}
+        <div className="flex flex-col md:flex-row items-center justify-between mb-16 gap-6">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(99,102,241,0.3)]">
+              <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
             </div>
-            <h1 className="text-3xl font-black tracking-tight">SmartConverter <span className="text-cyan-400">Pro</span></h1>
+            <h1 className="text-4xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 via-purple-300 to-cyan-300 tracking-tighter">Converter<span className="text-white">Pro</span></h1>
           </div>
-
-          <div
-            className={`flex-1 border-2 border-dashed rounded-[2.5rem] p-8 transition-all duration-500 flex flex-col items-center justify-center relative overflow-hidden group
-              ${dragActive ? "border-cyan-400 bg-cyan-400/5" : "border-slate-800 bg-slate-900/50 hover:border-slate-700"}`}
-            onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-            onDragLeave={() => setDragActive(false)}
-            onDrop={handleDrop}
-            onClick={() => !file && fileInputRef.current.click()}
-          >
-            <input ref={fileInputRef} type="file" className="hidden" onChange={(e) => { if (e.target.files[0]) { setFile(e.target.files[0]); setResult(null); } }} accept="image/*,.pdf" />
-
-            {!file ? (
-              <div className="text-center space-y-4">
-                <div className="w-24 h-24 bg-slate-800 rounded-3xl flex items-center justify-center mx-auto transition-transform group-hover:scale-110 duration-500">
-                  <svg className="w-12 h-12 text-slate-400 group-hover:text-cyan-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-                </div>
-                <p className="text-xl font-bold">Upload Original File</p>
-                <p className="text-slate-500 text-sm">Drag and drop or click to browse</p>
-              </div>
-            ) : (
-              <div className="w-full flex flex-col items-center animate-in zoom-in-95 duration-500 overflow-auto max-h-[600px]">
-                <div className="relative mb-6">
-                  {previewUrl === "pdf-placeholder" ? (
-                    <div className="w-48 h-64 bg-slate-800 rounded-2xl flex flex-col items-center justify-center border border-slate-700 shadow-2xl relative">
-                      <div className="absolute top-4 left-4 w-8 h-2 bg-red-500 rounded-full opacity-50"></div>
-                      <svg className="w-20 h-20 text-red-500 mb-4" fill="currentColor" viewBox="0 0 24 24"><path d="M7 2v20h10V2H7zm8 18H9V4h6v16zM11 8h2v2h-2V8zm0 4h2v4h-2v-4z" /></svg>
-                      <span className="font-black text-slate-500 text-xs">PDF DOCUMENT</span>
-                    </div>
-                  ) : (
-                    showCrop ? (
-                      <ReactCrop
-                        crop={crop}
-                        onChange={(c) => setCrop(c)}
-                        onComplete={(c) => setCompletedCrop(c)}
-                      >
-                        <img
-                          ref={imgRef}
-                          src={previewUrl}
-                          onLoad={onImageLoad}
-                          className="max-h-[400px] w-auto rounded-3xl shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] border border-slate-800"
-                          alt="Preview"
-                        />
-                      </ReactCrop>
-                    ) : (
-                      <img src={previewUrl} className="max-h-[400px] w-auto rounded-3xl shadow-[0_30px_60px_-15px_rgba(0,0,0,0.5)] border border-slate-800" alt="Preview" />
-                    )
-                  )}
-                  {!showCrop && previewUrl !== "pdf-placeholder" && (
-                    <div className="absolute inset-0 border-2 border-transparent hover:border-cyan-400 border-dashed rounded-3xl pointer-events-none transition-colors"></div>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap gap-4 justify-center">
-                  <div className="bg-slate-800/80 backdrop-blur-md px-5 py-2 rounded-2xl border border-slate-700">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">FILENAME</p>
-                    <p className="text-sm font-bold truncate max-w-[200px] text-cyan-100">{file.name}</p>
-                  </div>
-                  <div className="bg-slate-800/80 backdrop-blur-md px-5 py-2 rounded-2xl border border-slate-700">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">ORIGINAL SIZE</p>
-                    <p className="text-sm font-bold text-cyan-400">{formatSize(file.size)}</p>
-                  </div>
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); setFile(null); setResult(null); }} className="mt-4 text-slate-500 hover:text-red-400 text-[10px] font-black uppercase tracking-widest">Change File</button>
-              </div>
-            )}
-          </div>
+          <div className="glass px-6 py-2 text-xs font-bold border-white/5 opacity-60 uppercase tracking-widest">1GB Batch Processing Enabled</div>
         </div>
 
-        {/* RIGHT SECTION: Advanced Controls (5 cols) */}
-        <div className="lg:col-span-5 bg-slate-900/50 border border-slate-800 rounded-[2.5rem] p-8 flex flex-col space-y-8 h-fit">
-          <div className="space-y-6">
-            <h2 className="text-xs font-black uppercase tracking-[0.3em] text-cyan-500">Processing Engine</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+          {/* MAIN UPLOAD ZONE */}
+          <div className="lg:col-span-8">
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={handleDrop}
+              onClick={() => files.length === 0 && fileInputRef.current.click()}
+              className={`glass min-h-[500px] flex flex-col p-8 transition-all duration-700 cursor-pointer group ${dragActive ? 'scale-[0.98] border-indigo-400 bg-indigo-400/5' : 'hover:bg-white/[0.015] border-white/5'}`}
+            >
+              <input ref={fileInputRef} type="file" className="hidden" multiple onChange={(e) => handleFiles(e.target.files)} accept="image/*,.pdf" />
 
-            {/* Format Selection */}
-            <div>
-              <label className="text-[10px] font-black text-slate-400 uppercase mb-3 block">Conversion Format</label>
-              <div className="grid grid-cols-4 gap-2">
-                {["png", "jpg", "webp", "pdf"].map((fmt) => (
-                  <button key={fmt} onClick={() => setFormat(fmt)} className={`py-3 rounded-xl text-xs font-black transition-all ${format === fmt ? "bg-cyan-500 text-black shadow-[0_0_20px_rgba(6,182,212,0.4)]" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
-                    {fmt.toUpperCase()}
+              {files.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center space-y-10">
+                  <div className="relative">
+                    <div className="absolute inset-0 bg-indigo-500 blur-3xl opacity-20 -z-10 animate-pulse"></div>
+                    <div className="w-36 h-36 bg-white/5 rounded-[3rem] flex items-center justify-center group-hover:scale-110 group-hover:rotate-3 transition-all duration-700 border border-white/10 shadow-2xl">
+                      <svg className="w-16 h-16 text-indigo-400/80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                    </div>
+                  </div>
+                  <div className="text-center space-y-2">
+                    <h2 className="text-3xl font-black tracking-tight">Drop your files here</h2>
+                    <p className="text-slate-400/80 text-sm font-medium">Support images and PDFs up to 1GB</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6 animate-in fade-in zoom-in duration-700">
+                  {previews.map((preview, idx) => (
+                    <div key={idx} className={`glass group/item relative overflow-hidden aspect-square border-white/10 hover:border-white/20 transition-all ${showCrop && activeCropIndex === idx ? 'ring-2 ring-indigo-500/50' : ''}`}>
+                      <div className="w-full h-full flex items-center justify-center p-3 relative overflow-hidden">
+                        {preview.url === "pdf-placeholder" ? (
+                          <div className="flex flex-col items-center opacity-40 group-hover/item:opacity-80 transition-opacity"><svg className="w-14 h-14 text-red-500/60" fill="currentColor" viewBox="0 0 24 24"><path d="M7 2v20h10V2H7zm8 18H9V4h6v16zM11 8h2v2h-2V8zm0 4h2v4h-2v-4z" /></svg><span className="text-[10px] mt-2 font-black tracking-widest">PDF</span></div>
+                        ) : (
+                          showCrop && activeCropIndex === idx ? (
+                            <div className="w-full h-full flex items-center justify-center p-1">
+                              <ReactCrop crop={fileCrops[idx]?.crop} onChange={handleCropChange} onComplete={handleCropComplete}>
+                                <img ref={imgRef} src={preview.url} onLoad={onImageLoad} className="max-h-full object-contain" alt="Crop" />
+                              </ReactCrop>
+                            </div>
+                          ) : (
+                            <img src={preview.url} className="w-full h-full object-cover rounded-xl shadow-lg ring-1 ring-white/5" alt="Preview" />
+                          )
+                        )}
+                      </div>
+                      <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover/item:opacity-100 transition-all duration-300 transform translate-y-[-10px] group-hover/item:translate-y-0">
+                        {preview.url !== "pdf-placeholder" && (
+                          <button onClick={(e) => { e.stopPropagation(); setActiveCropIndex(idx); setShowCrop(true); }} className="w-9 h-9 glass flex items-center justify-center hover:bg-indigo-600 transition-all rounded-xl shadow-xl border-white/10" title="Crop">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M16 16v6h2v-6h6v-2h-6V4h-2v10H4v2h10z" /></svg>
+                          </button>
+                        )}
+                        <button onClick={(e) => { e.stopPropagation(); removeFile(idx); }} className="w-9 h-9 glass flex items-center justify-center hover:bg-red-600 transition-all rounded-xl shadow-xl border-white/10" title="Remove">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                      </div>
+                      {fileCrops[idx]?.completedCrop && !showCrop && <div className="absolute bottom-3 left-3 px-2 py-0.5 bg-indigo-500/80 backdrop-blur-md text-[8px] font-black rounded-lg shadow-lg">CROPPED</div>}
+                      <div className="absolute bottom-3 right-3 text-[10px] font-black opacity-40 bg-black/40 px-2 py-0.5 rounded-md backdrop-blur-sm pointer-events-none">
+                        {formatSize(preview.size)}
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={(e) => { e.stopPropagation(); fileInputRef.current.click(); }} className="glass flex flex-col items-center justify-center aspect-square border-dashed border-white/10 hover:border-indigo-400 group/add transition-all duration-500 hover:bg-white/[0.01]">
+                    <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center group-hover/add:rotate-90 group-hover/add:bg-indigo-500 group-hover/add:text-white transition-all duration-700">
+                      <svg className="w-6 h-6 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 4v16m8-8H4" /></svg>
+                    </div>
                   </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Crop Settings */}
-            {file && file.type.startsWith("image/") && (
-              <div className="space-y-4">
-                <button onClick={() => setShowCrop(!showCrop)} className={`w-full py-3 rounded-xl text-xs font-black border transition-all ${showCrop ? "border-cyan-500 bg-cyan-500/10 text-cyan-400" : "border-slate-800 text-slate-500 hover:border-slate-700"}`}>
-                  {showCrop ? "FINISH CROPPING" : "START VISUAL CROP"}
-                </button>
-                {showCrop && (
-                  <p className="text-[10px] text-cyan-500/70 text-center font-bold">Drag the box on the image to select area</p>
-                )}
-              </div>
-            )}
-
-            {/* Manual Size Compression & Quality */}
-            <div className="space-y-4 pt-4 border-t border-slate-800">
-              <div className="flex justify-between items-center">
-                <label className="text-[10px] font-black text-slate-400 uppercase">Compression Quality ({quality}%)</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="10"
-                    max="100"
-                    value={quality}
-                    onChange={(e) => setQuality(e.target.value)}
-                    className="w-16 bg-slate-950 border border-slate-800 rounded-lg p-1 text-center text-xs font-black text-cyan-400 outline-none focus:border-cyan-500"
-                  />
-                  <span className="text-[10px] font-bold text-slate-600">%</span>
                 </div>
-              </div>
-              <input
-                type="range"
-                min="10"
-                max="100"
-                value={quality}
-                onChange={(e) => setQuality(e.target.value)}
-                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-              />
-
-              <label className="text-[10px] font-black text-slate-400 uppercase block mt-4">Manual Size Target (Limit)</label>
-              <div className="flex gap-2">
-                <input type="number" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder="Limit (e.g. 500)" className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm focus:border-cyan-500 outline-none transition-all" />
-                <select value={targetUnit} onChange={(e) => setTargetUnit(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-3 text-xs font-bold outline-none">
-                  <option>B</option>
-                  <option>KB</option>
-                  <option>MB</option>
-                </select>
-              </div>
-              <p className="text-[9px] text-slate-600 italic leading-relaxed">System will auto-adjust quality iteratively to reach this target size.</p>
+              )}
             </div>
-
-            {/* PDF Compression Toggle */}
-            {format === "pdf" && (
-              <div className="flex items-center justify-between bg-emerald-500/5 p-4 rounded-2xl border border-emerald-500/20">
-                <div>
-                  <h3 className="text-sm font-bold text-emerald-100">Optimize PDF</h3>
-                  <p className="text-[10px] text-slate-500">Reduce internal structure size</p>
-                </div>
-                <button onClick={() => setPdfCompress(!pdfCompress)} className={`w-12 h-6 rounded-full transition-colors relative ${pdfCompress ? "bg-emerald-500" : "bg-slate-700"}`}>
-                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${pdfCompress ? "left-7" : "left-1"}`}></div>
-                </button>
+            {files.length > 0 && (
+              <div className="mt-8 flex justify-between items-center px-4">
+                <span className="text-[10px] font-black opacity-30 tracking-[0.4em] uppercase">{files.length} Items Indexed</span>
+                <button onClick={() => { setFiles([]); setResult(null); setFileCrops({}); }} className="text-[10px] font-extrabold text-red-400/40 hover:text-red-400 transition-colors uppercase tracking-widest">Clear Pipeline</button>
               </div>
             )}
           </div>
 
-          {!result ? (
-            <button
-              onClick={handleConvert}
-              disabled={!file || loading}
-              className={`w-full py-5 rounded-[1.25rem] font-black text-sm uppercase tracking-[0.2em] shadow-2xl transition-all duration-500
-                ${!file || loading ? "bg-slate-800 text-slate-600" : "bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:scale-[1.02] active:scale-95 shadow-cyan-500/20 hover:shadow-cyan-500/40"}`}
-            >
-              {loading ? (
-                <div className="flex items-center justify-center gap-3">
-                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                  Processing...
+          {/* SIDEBAR SETTINGS */}
+          <div className="lg:col-span-4 space-y-10">
+            <div className="glass p-8 space-y-12 border-white/5 sticky top-12">
+              <div className="space-y-8">
+                <h3 className="text-xs font-black uppercase tracking-[0.4em] text-indigo-400/80">Global Configuration</h3>
+
+                <div className="space-y-5">
+                  <label className="text-[10px] font-black opacity-40 uppercase tracking-[0.2em]">Output Engine</label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {["png", "jpg", "webp", "pdf"].map((fmt) => (
+                      <button key={fmt} onClick={() => setFormat(fmt)} className={`py-4 rounded-xl text-xs font-black transition-all ${format === fmt ? "bg-indigo-600 shadow-[0_0_20px_rgba(99,102,241,0.5)] border-t border-white/20" : "bg-white/5 hover:bg-white/10 border border-white/5"}`}>
+                        {fmt.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              ) : "Ignite Conversion"}
-            </button>
-          ) : (
-            <div className="space-y-4 animate-in slide-in-from-bottom-4 duration-700">
-              <div className="bg-emerald-500/10 border border-emerald-500/20 p-5 rounded-3xl flex items-center justify-between">
-                <div>
-                  <label className="text-[9px] font-black text-emerald-500 uppercase tracking-widest block mb-1">DOWNLOAD SIZE</label>
-                  <p className="text-xl font-black text-emerald-400">{formatSize(result.size)}</p>
-                </div>
-                <div className="bg-emerald-500/20 px-3 py-1 rounded-full">
-                  <span className="text-[10px] font-bold text-emerald-400">-{Math.round(((file.size - result.size) / file.size) * 100)}%</span>
+
+                {showCrop && (
+                  <div className="p-6 bg-indigo-500/10 border border-indigo-500/20 rounded-[1.5rem] animate-in slide-in-from-right-4 duration-500 shadow-inner">
+                    <div className="flex justify-between items-center mb-3">
+                      <span className="text-xs font-black text-indigo-400 uppercase tracking-tighter">Item #{activeCropIndex + 1} Matrix</span>
+                      <button onClick={() => setShowCrop(false)} className="px-4 py-1.5 bg-indigo-600 rounded-xl text-[10px] font-black hover:bg-indigo-500 shadow-xl border-t border-white/10 transition-colors">SAVE</button>
+                    </div>
+                    <p className="text-[10px] opacity-40 font-medium italic">Define the extraction boundaries manually.</p>
+                  </div>
+                )}
+
+                <div className="space-y-5">
+                  <label className="text-[10px] font-black opacity-40 uppercase tracking-[0.2em]">Data Size Constraint</label>
+                  <div className="flex gap-2">
+                    <input type="number" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder="0.00" className="flex-1 glass bg-white/5 border-white/10 p-5 text-sm font-bold focus:border-indigo-500 outline-none transition-all placeholder:opacity-20" />
+                    <select value={targetUnit} onChange={(e) => setTargetUnit(e.target.value)} className="glass bg-slate-900/80 border-white/10 px-5 text-[10px] font-black outline-none appearance-none cursor-pointer hover:bg-slate-800 transition-colors">
+                      {["B", "KB", "MB", "GB"].map(u => <option key={u} value={u} className="bg-slate-900">{u}</option>)}
+                    </select>
+                  </div>
                 </div>
               </div>
-              <button onClick={downloadResult} className="w-full py-5 bg-white text-black rounded-[1.25rem] font-black text-sm uppercase tracking-[0.2em] hover:bg-emerald-50 transition-colors shadow-2xl">
-                Save Result
-              </button>
-              <button onClick={() => { setFile(null); setResult(null); }} className="w-full text-slate-500 text-[10px] font-black uppercase tracking-widest hover:text-slate-300 transition-colors">START NEW TASK</button>
+
+              {!result ? (
+                <button
+                  onClick={handleConvert}
+                  disabled={files.length === 0 || loading}
+                  className="w-full premium-button h-20 shadow-2xl relative overflow-hidden group"
+                >
+                  <div className="absolute inset-0 bg-white/10 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700 skew-x-[-20deg]"></div>
+                  {loading ? (
+                    <div className="flex items-center justify-center gap-4">
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      <span className="tracking-[0.2em]">PROCESSING...</span>
+                    </div>
+                  ) : <span className="tracking-[0.2em]">PROCEED</span>}
+                </button>
+              ) : (
+                <div className="space-y-5 animate-in slide-in-from-bottom-6 duration-700">
+                  <div className="glass p-8 border-emerald-500/20 bg-emerald-500/5 shadow-inner">
+                    <label className="text-[10px] font-black text-emerald-400 uppercase tracking-[0.3em] block mb-4">Payload Generated</label>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-4xl font-black tabular-nums">{formatSize(result.size).split(' ')[0]}</span>
+                      <span className="text-xs opacity-50 font-black uppercase tracking-widest">{formatSize(result.size).split(' ')[1]}</span>
+                    </div>
+                  </div>
+                  <button onClick={() => { const link = document.createElement("a"); link.href = result.url; link.download = `converted_${Date.now()}.${result.format}`; link.click(); }} className="w-full py-6 bg-white text-black rounded-2xl font-black text-sm uppercase hover:bg-indigo-50 transition-all shadow-2xl flex items-center justify-center gap-4 hover:scale-[1.02] active:scale-95 duration-300 group">
+                    <svg className="w-5 h-5 group-hover:animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    DOWNLOAD
+                  </button>
+                  <button onClick={() => { setFiles([]); setResult(null); setFileCrops({}); }} className="w-full text-[9px] font-black opacity-20 hover:opacity-100 tracking-[0.4em] uppercase transition-all mt-4">DESTROY SESSION</button>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>
